@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,8 +96,17 @@ func TestIncludeThenExclude(t *testing.T) {
 }
 
 func TestFilterLeavesNothing(t *testing.T) {
-	cfg, _ := runFilter(t, "--include", "*Narnia*")
-	assertDeepEqual(t, configTags(cfg), []string{})
+	sub := newHeaderRecorder(t, filterSubscription())
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "04_outbounds.s.json")
+	original := []byte(`{"outbounds":[{"tag":"keep","protocol":"freedom"}]}`)
+	if err := os.WriteFile(filename, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--output-dir", dir, "--no-restart", "--no-hwid", "--include", "*Narnia*", "--tag", "s", "--url", sub.URL}); err == nil {
+		t.Fatal("empty selection must report an error")
+	}
+	assertFileEquals(t, filename, original)
 }
 
 func TestFilterAppliesBeforeSingleProxy(t *testing.T) {

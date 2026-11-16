@@ -43,35 +43,41 @@ func doHTTPRequest(requestURL string, withProxy bool, device *deviceInfo) (strin
 
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("неверный URL подписки")
 	}
 	if device != nil {
 		device.setHeaders(req.Header)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("HTTP-запрос подписки не выполнен (URL и параметры скрыты)")
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	const maxSubscriptionBytes = 8 << 20
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("не удалось прочитать ответ подписки")
+	}
+	if len(bodyBytes) > maxSubscriptionBytes {
+		return "", fmt.Errorf("ответ подписки превышает 8 MiB")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("HTTP %d при запросе подписки", resp.StatusCode)
 	}
 
 	return string(bodyBytes), nil
 }
 
 func parseSubscriptionResponse(body string) []string {
-	body = strings.TrimSpace(body)
+	body = strings.TrimPrefix(strings.TrimSpace(body), "\ufeff")
 
-	decoded, err := base64.StdEncoding.DecodeString(body)
-	if err == nil {
-		body = strings.TrimSpace(string(decoded))
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if decoded, err := encoding.DecodeString(body); err == nil {
+			body = strings.TrimSpace(string(decoded))
+			break
+		}
 	}
 
 	var result []string
@@ -80,12 +86,14 @@ func parseSubscriptionResponse(body string) []string {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "vless://") ||
-			strings.HasPrefix(line, "vmess://") ||
-			strings.HasPrefix(line, "trojan://") ||
-			strings.HasPrefix(line, "ss://") ||
-			strings.HasPrefix(line, "hysteria2://") {
-			result = append(result, line)
+		scheme, remainder, found := strings.Cut(line, "://")
+		if !found {
+			continue
+		}
+		scheme = strings.ToLower(scheme)
+		switch scheme {
+		case "vless", "vmess", "trojan", "ss", "hysteria2", "hy2":
+			result = append(result, scheme+"://"+remainder)
 		}
 	}
 
@@ -95,7 +103,7 @@ func parseSubscriptionResponse(body string) []string {
 // rawProxyName возвращает декодированное имя узла без очистки: из фрагмента URL, а у vmess без
 // фрагмента — из поля ps.
 func rawProxyName(rawURL string) string {
-	idx := strings.LastIndex(rawURL, "#")
+	idx := strings.Index(rawURL, "#")
 	if idx < 0 {
 		if strings.HasPrefix(rawURL, "vmess://") {
 			return vmessName(rawURL)
@@ -103,7 +111,7 @@ func rawProxyName(rawURL string) string {
 		return ""
 	}
 	fragment := strings.TrimSpace(rawURL[idx+1:])
-	if name, err := url.QueryUnescape(fragment); err == nil {
+	if name, err := url.PathUnescape(fragment); err == nil {
 		return strings.TrimSpace(name)
 	}
 	return fragment

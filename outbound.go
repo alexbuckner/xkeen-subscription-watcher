@@ -208,6 +208,20 @@ func generateOutbound(p proxy, tag string, realityFingerprint string, dialerProx
 				},
 			},
 		}
+		ss := proxyConfig["streamSettings"].(map[string]any)
+		if len(p.alpn) > 0 {
+			ss["tlsSettings"].(map[string]any)["alpn"] = p.alpn
+		}
+		if p.obfs == "salamander" {
+			ss["finalmask"] = map[string]any{
+				"udp": []any{
+					map[string]any{
+						"type":     "salamander",
+						"settings": map[string]any{"password": p.obfsPassword},
+					},
+				},
+			}
+		}
 
 	default:
 		panic("unreachable")

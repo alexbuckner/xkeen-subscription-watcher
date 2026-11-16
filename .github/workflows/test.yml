@@ -7,6 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        xray-version: ["26.6.1", "26.11.9"]
 
     steps:
     - name: Checkout
@@ -25,15 +28,16 @@ jobs:
 
     - name: Download Xray
       run: |
-        curl -sSfLo "$RUNNER_TEMP/xray.zip" https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip
+        curl -sSfLo "$RUNNER_TEMP/xray.zip" https://github.com/XTLS/Xray-core/releases/download/v${{ matrix.xray-version }}/Xray-linux-64.zip
         unzip -o "$RUNNER_TEMP/xray.zip" xray -d "$RUNNER_TEMP/xray"
         echo "XRAY_BINARY=$RUNNER_TEMP/xray/xray" >> "$GITHUB_ENV"
 
     - name: Run tests
       run: go test -v -race -coverprofile=coverage.out ./...
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v6
-      with:
-        files: coverage.out
-        token: ${{ secrets.CODECOV_TOKEN }}
+    - name: Cross-compile arm64
+      env:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: "0"
+      run: go build -trimpath -o "$RUNNER_TEMP/xkeen-subscription-watcher-linux-arm64" .

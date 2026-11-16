@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -47,6 +48,12 @@ func newRootCmd() *cobra.Command {
 		exclude            []string
 		tagFlag            string
 		urlFlag            string
+		urlFile            string
+		tagMapFile         string
+		updateFile         string
+		backupDir          string
+		dryRun             bool
+		validate           bool
 	)
 
 	cmd := &cobra.Command{
@@ -54,6 +61,19 @@ func newRootCmd() *cobra.Command {
 		Short: "Обработка подписок и генерация конфигураций для Xray",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if urlFile != "" {
+				if urlFlag != "" {
+					return fmt.Errorf("--url и --url-file нельзя использовать вместе")
+				}
+				data, err := os.ReadFile(urlFile)
+				if err != nil {
+					return fmt.Errorf("не удалось прочитать --url-file: %w", err)
+				}
+				urlFlag = strings.TrimSpace(string(data))
+				if urlFlag == "" || len(data) > 16384 {
+					return fmt.Errorf("--url-file должен содержать один непустой URL подписки")
+				}
+			}
 			args, err := subscriptionArgs(args, tagFlag, urlFlag)
 			if err != nil {
 				return err
@@ -63,6 +83,27 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			cfg.sendHWID = !noHWID
+			cfg.dryRun = dryRun
+			cfg.validate = validate || tagMapFile != ""
+			cfg.updateFile = updateFile
+			cfg.backupDir = backupDir
+			if tagMapFile != "" {
+				cfg.tagRules, err = loadTagRules(tagMapFile)
+				if err != nil {
+					return err
+				}
+				if len(cfg.subscriptions) != 1 || singleProxy || len(dialerProxies) != 0 {
+					return fmt.Errorf("--tag-map требует одну подписку без --single-proxy и --dialer-proxies")
+				}
+			}
+			if updateFile != "" {
+				if len(cfg.tagRules) == 0 || filepath.Base(updateFile) != updateFile || strings.ContainsAny(updateFile, "/\\") || !strings.HasSuffix(updateFile, ".json") {
+					return fmt.Errorf("--update-file требует --tag-map и имя существующего .json файла внутри --output-dir")
+				}
+			}
+			if tagMapFile != "" && updateFile == "" {
+				return fmt.Errorf("--tag-map используется вместе с --update-file для сохранения существующих тегов")
+			}
 			if cfg.filter, err = newNameFilter(include, exclude); err != nil {
 				return err
 			}
@@ -74,6 +115,18 @@ func newRootCmd() *cobra.Command {
 		"Тег подписки: имя файла 04_outbounds.<tag>.json и префикс тегов узлов. Указывается вместе с --url.")
 	cmd.Flags().StringVar(&urlFlag, "url", "",
 		"URL подписки. Указывается вместе с --tag.")
+	cmd.Flags().StringVar(&urlFile, "url-file", "",
+		"Файл с URL подписки: секрет не попадает в crontab и аргументы процесса.")
+	cmd.Flags().StringVar(&tagMapFile, "tag-map", "",
+		"JSON с явным сопоставлением узлов постоянным тегам маршрутизации.")
+	cmd.Flags().StringVar(&updateFile, "update-file", "",
+		"Обновить выбранные теги в существующем файле внутри --output-dir, сохранив остальные профили.")
+	cmd.Flags().StringVar(&backupDir, "backup-dir", "",
+		"Каталог резервных копий (по умолчанию subscription-backups рядом с каталогом конфигов).")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"Проверить изменения, не записывая конфиги и не вызывая API Xray.")
+	cmd.Flags().BoolVar(&validate, "validate", false,
+		"Проверить полный кандидат через Xray -test; с --update-file включено всегда.")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "/opt/etc/xray/configs",
 		"Каталог для сохранения сгенерированных конфигураций.")
 	cmd.Flags().BoolVar(&noRestart, "no-restart", false,
@@ -149,6 +202,11 @@ type config struct {
 	sendHWID           bool
 	device             *deviceInfo
 	filter             nameFilter
+	tagRules           []tagRule
+	updateFile         string
+	backupDir          string
+	dryRun             bool
+	validate           bool
 }
 
 type subscription struct {
@@ -172,14 +230,17 @@ func buildConfig(
 	for _, arg := range positionalArgs {
 		tag, u, found := strings.Cut(arg, "=")
 		if !found {
-			return config{}, fmt.Errorf("неверный формат подписки: %q, ожидается <tag>=<url>", arg)
+			return config{}, fmt.Errorf("неверный формат подписки, ожидается <tag>=<url>")
+		}
+		if tag == "" || tag == "." || tag == ".." || strings.ContainsAny(tag, "/\\\r\n\x00") {
+			return config{}, fmt.Errorf("неверный тег подписки: запрещены пустые имена и разделители пути")
 		}
 		if tags[tag] {
 			return config{}, fmt.Errorf("тег %q указан несколько раз, используйте уникальные имена", tag)
 		}
 		tags[tag] = true
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-			return config{}, fmt.Errorf("неизвестный формат URL: %s, URL должен начинаться на http:// или https://", u)
+			return config{}, fmt.Errorf("URL должен начинаться на http:// или https://")
 		}
 		subs = append(subs, subscription{tag: tag, url: u})
 	}
@@ -235,27 +296,47 @@ func writeFileAtomic(path string, content []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0644); err != nil {
+	if err := os.Chmod(tmpPath, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
 }
 
 func execute(cfg config) error {
+	unlock, err := lockOutputDir(cfg.outputDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if len(cfg.tagRules) > 0 {
+		target := cfg.updateFile
+		if target == "" {
+			target = fmt.Sprintf("04_outbounds.%s.json", cfg.subscriptions[0].tag)
+		}
+		if err := validateMappedTagOwnership(cfg.outputDir, target, cfg.tagRules); err != nil {
+			return err
+		}
+	}
+
 	if cfg.sendHWID {
 		device, err := fetchDeviceInfo()
 		if err != nil {
 			return fmt.Errorf("не удалось получить HWID роутера, используйте --no-hwid: %w", err)
 		}
-		log.Printf("Отправляем HWID роутера: %s.", device.HWID)
+		log.Println("Отправляем HWID роутера в запросе подписки.")
 		cfg.device = device
 	}
 
 	var updates []*pendingUpdate
+	var preparationErrors []error
 	for _, sub := range cfg.subscriptions {
 		update, err := prepareUpdate(sub, cfg)
 		if err != nil {
+			if len(cfg.tagRules) > 0 {
+				return fmt.Errorf("подписка %q: %w", sub.tag, err)
+			}
 			log.Printf("Ошибка при обработке подписки %q, пропускаем: %v", sub.tag, err)
+			preparationErrors = append(preparationErrors, err)
 			continue
 		}
 		if update != nil {
@@ -264,14 +345,48 @@ func execute(cfg config) error {
 	}
 
 	if len(updates) == 0 {
+		if len(preparationErrors) > 0 {
+			return errors.Join(preparationErrors...)
+		}
 		log.Println("Изменений в подписках не найдено, завершаем работу.")
 		return nil
+	}
+	if cfg.validate {
+		if err := validatePendingUpdates(cfg.outputDir, updates); err != nil {
+			return err
+		}
+	}
+	if cfg.dryRun {
+		log.Printf("Проверка завершена: изменится файлов %d; конфиги и работающий Xray не изменены.", len(updates))
+		return nil
+	}
+	backupDir := cfg.backupDir
+	if backupDir == "" {
+		backupDir = filepath.Join(filepath.Dir(filepath.Clean(cfg.outputDir)), "subscription-backups")
+	}
+	// Xray loads .json files in confdir; backups must stay outside it.
+	outputAbs, err := filepath.Abs(cfg.outputDir)
+	if err != nil {
+		return err
+	}
+	backupAbs, err := filepath.Abs(backupDir)
+	if err != nil {
+		return err
+	}
+	if rel, err := filepath.Rel(outputAbs, backupAbs); err != nil || rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("--backup-dir должен находиться вне каталога конфигов")
 	}
 
 	if !cfg.applyToXray {
 		for _, update := range updates {
+			if err := ensureUpdateUnchanged(update); err != nil {
+				return err
+			}
+			if err := backupPendingUpdate(update, backupDir); err != nil {
+				return err
+			}
 			if err := update.write(update.newContent); err != nil {
-				log.Printf("Ошибка при обработке подписки %q: %v", update.sub.tag, err)
+				return err
 			}
 		}
 		return nil
@@ -285,7 +400,17 @@ func execute(cfg config) error {
 
 	var errs []error
 	for _, update := range updates {
-		if err := applyUpdate(api, update); err != nil {
+		if err := ensureUpdateUnchanged(update); err != nil {
+			return err
+		}
+		if err := backupPendingUpdate(update, backupDir); err != nil {
+			return err
+		}
+		apply := applyUpdate
+		if cfg.updateFile != "" {
+			apply = applyManagedUpdate
+		}
+		if err := apply(api, update); err != nil {
 			errs = append(errs, fmt.Errorf("подписка %q: %w", update.sub.tag, err))
 		}
 	}
@@ -331,6 +456,19 @@ func applyUpdate(api outboundAPI, update *pendingUpdate) error {
 // Возвращает nil, если содержимое не изменилось.
 func prepareUpdate(sub subscription, cfg config) (*pendingUpdate, error) {
 	outputPath := filepath.Join(cfg.outputDir, fmt.Sprintf("04_outbounds.%s.json", sub.tag))
+	if cfg.updateFile != "" {
+		outputPath = filepath.Join(cfg.outputDir, cfg.updateFile)
+	}
+	existingContent, err := os.ReadFile(outputPath)
+	if err != nil {
+		if !os.IsNotExist(err) || cfg.updateFile != "" {
+			return nil, fmt.Errorf("не удалось прочитать целевой файл: %w", err)
+		}
+		existingContent = nil
+	}
+	if existingContent != nil && !json.Valid(existingContent) {
+		return nil, fmt.Errorf("неверный JSON в файле %s", filepath.Base(outputPath))
+	}
 
 	outbounds, err := getOutbounds(sub, cfg)
 	if err != nil {
@@ -338,14 +476,14 @@ func prepareUpdate(sub subscription, cfg config) (*pendingUpdate, error) {
 	}
 
 	newContent, err := marshalOutbounds(outbounds)
+	if cfg.updateFile != "" {
+		newContent, err = mergeManagedOutbounds(existingContent, outbounds)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	existingContent, err := os.ReadFile(outputPath)
-	if err != nil {
-		existingContent = nil
-	} else if bytes.Equal(existingContent, newContent) {
+	if bytes.Equal(existingContent, newContent) || equalJSON(existingContent, newContent) {
 		log.Printf("Изменения в подписке %q не найдены, пропускаем.", sub.tag)
 		return nil, nil
 	}
@@ -358,14 +496,25 @@ func prepareUpdate(sub subscription, cfg config) (*pendingUpdate, error) {
 	}, nil
 }
 
+func equalJSON(left, right []byte) bool {
+	var a, b any
+	if json.Unmarshal(left, &a) != nil || json.Unmarshal(right, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
 func getOutbounds(sub subscription, cfg config) ([]any, error) {
-	log.Printf("Запрашиваем URL подписки: %s.", sub.url)
+	log.Printf("Запрашиваем подписку %q.", sub.tag)
 
 	proxyURLs, err := fetchProxyURLs(sub, cfg.device)
 	if err != nil {
 		return nil, err
 	}
 	sort.Strings(proxyURLs)
+	if len(cfg.tagRules) > 0 {
+		return getMappedOutbounds(proxyURLs, cfg)
+	}
 
 	tagCounters := make(map[string]int)
 	var result []any
@@ -379,7 +528,7 @@ func getOutbounds(sub subscription, cfg config) ([]any, error) {
 
 		p, err := parseProxyURL(proxyURL)
 		if err != nil {
-			log.Printf("Не удалось распарсить URL прокси %q из подписки %q, пропускаем: %v", proxyURL, sub.tag, err)
+			log.Printf("Не удалось разобрать узел из подписки %q, пропускаем (параметры подключения скрыты).", sub.tag)
 			continue
 		}
 
@@ -407,6 +556,9 @@ func getOutbounds(sub subscription, cfg config) ([]any, error) {
 
 	if filtered > 0 {
 		log.Printf("В подписке %q отфильтровано узлов по --include/--exclude: %d.", sub.tag, filtered)
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("подписка не содержит подходящих поддерживаемых узлов; рабочий файл сохранён")
 	}
 	return result, nil
 }

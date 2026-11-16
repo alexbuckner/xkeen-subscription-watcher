@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="tkukushkin/xkeen-subscription-watcher"
+REPO="alexbuckner/xkeen-subscription-watcher"
 INSTALL_PATH="/opt/sbin/xkeen-subscription-watcher"
 
 detect_arch() {
@@ -47,7 +47,10 @@ echo "Последняя версия: $TAG"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/xkeen-subscription-watcher-linux-$ARCH"
 
 echo "Скачиваем $DOWNLOAD_URL ..."
-curl -sSLo "$INSTALL_PATH" "$DOWNLOAD_URL"
-chmod +x "$INSTALL_PATH"
+INSTALL_TMP=$(mktemp "${INSTALL_PATH}.XXXXXX.tmp")
+trap 'rm -f "$INSTALL_TMP"' EXIT HUP INT TERM
+curl -sSfLo "$INSTALL_TMP" "$DOWNLOAD_URL"
+chmod 755 "$INSTALL_TMP"
+mv -f "$INSTALL_TMP" "$INSTALL_PATH"
 
 echo "Установлено: $INSTALL_PATH ($TAG, $ARCH)"

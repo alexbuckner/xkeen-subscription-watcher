@@ -1,0 +1,7 @@
+{
+  "rules": [
+    {"name": "*SE #4*", "protocol": "hysteria2", "tag": "hysteria2-se4"},
+    {"name": "*USA*VA, Manassas*", "protocol": "vless", "network": "tcp", "security": "reality", "tag": "vless-reality-us9", "flow": "xtls-rprx-vision-udp443"},
+    {"name": "*India*", "protocol": "vless", "network": "tcp", "security": "reality", "tag": "vless-reality-in1", "flow": "xtls-rprx-vision-udp443"}
+  ]
+}
