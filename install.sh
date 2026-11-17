@@ -47,7 +47,7 @@ echo "Последняя версия: $TAG"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/xkeen-subscription-watcher-linux-$ARCH"
 
 echo "Скачиваем $DOWNLOAD_URL ..."
-INSTALL_TMP=$(mktemp "${INSTALL_PATH}.XXXXXX.tmp")
+INSTALL_TMP=$(mktemp "${INSTALL_PATH}.XXXXXX")
 trap 'rm -f "$INSTALL_TMP"' EXIT HUP INT TERM
 curl -sSfLo "$INSTALL_TMP" "$DOWNLOAD_URL"
 chmod 755 "$INSTALL_TMP"
