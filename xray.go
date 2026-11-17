@@ -22,8 +22,8 @@ const (
 
 var errAPINotConfigured = errors.New(`в конфиге Xray не включён API: добавьте секцию "api" с "listen" и "HandlerService" в "services", например {"api": {"tag": "api", "listen": "127.0.0.1:10085", "services": ["HandlerService"]}}`)
 
-// runXray запускает xray с таймаутом и возвращает stdout. В ошибку попадают аргументы,
-// stdout и stderr.
+// runXray запускает xray с таймаутом и возвращает stdout. Вывод дочернего процесса
+// не включается в ошибки: диагностика Xray может содержать секреты конфигурации.
 func runXray(timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -37,8 +37,14 @@ func runXray(timeout time.Duration, stdin []byte, args ...string) ([]byte, error
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		output := strings.TrimSpace(strings.TrimSpace(stdout.String()) + "\n" + strings.TrimSpace(stderr.String()))
-		return nil, fmt.Errorf("%s %s: %w: %s", xrayBinary, strings.Join(args, " "), err, output)
+		action := "command"
+		if len(args) > 0 {
+			action = args[0]
+		}
+		if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+			action += " " + args[1]
+		}
+		return nil, fmt.Errorf("%s %s: %w (process output suppressed)", xrayBinary, action, err)
 	}
 	return stdout.Bytes(), nil
 }

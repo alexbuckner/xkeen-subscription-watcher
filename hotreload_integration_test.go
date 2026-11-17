@@ -211,8 +211,8 @@ func TestHotReloadRetriesAfterPartialFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected second run to fail")
 	}
-	if !strings.Contains(err.Error(), "flow") {
-		t.Errorf("error should mention flow: %v", err)
+	if !strings.Contains(err.Error(), "api ado") || strings.Contains(err.Error(), "bogus") {
+		t.Errorf("error should identify the API action without leaking configuration values: %v", err)
 	}
 	srv.set("applied", ssNode("h2.example.com", "n1"), ssNode("h1.example.com", "n3"))
 	assertFileEquals(t, path, expectedFile(t, "s", srv.arg("s", "applied")))

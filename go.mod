@@ -1,4 +1,4 @@
-module github.com/tkukushkin/xkeen-subscription-watcher
+module github.com/alexbuckner/xkeen-subscription-watcher
 
 go 1.25.0
 
