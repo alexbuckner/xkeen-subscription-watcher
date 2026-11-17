@@ -15,13 +15,29 @@
 
 ## Сборка и установка
 
-Нужен Go версии из `go.mod`. Для arm64:
+Выполните на роутере по SSH одну команду, как для исходного проекта:
+
+```sh
+curl -sSf https://raw.githubusercontent.com/alexbuckner/xkeen-subscription-watcher/master/install.sh | sh
+```
+
+Установщик сам выбирает arm64, armv7, mips или mipsel, скачивает последний релиз **этого форка** и устанавливает бинарник в `/opt/sbin/xkeen-subscription-watcher`. Повторный запуск обновляет программу. Если загрузка не удалась, прежний бинарник сохраняется.
+
+Проверка версии:
+
+```sh
+xkeen-subscription-watcher version
+```
+
+Команда устанавливает программу. Подключение подписки и расписание настраиваются ниже; установка не перезапускает Xray и не меняет маршрутизацию.
+
+Для самостоятельной сборки нужен Go версии из `go.mod`. Пример для arm64:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o xkeen-subscription-watcher-linux-arm64 .
 ```
 
-Скопируйте подходящий бинарник в `/opt/sbin/xkeen-subscription-watcher`, права `0755`. После публикации релиза форка готовый бинарник можно установить через `install.sh`: он загружает релизы **alexbuckner/xkeen-subscription-watcher**. Бинарники исходного проекта не содержат доработок этого форка.
+При ручной установке скопируйте подходящий бинарник в `/opt/sbin/xkeen-subscription-watcher`, права `0755`. Бинарники исходного проекта не содержат доработок этого форка.
 
 ## Обновление существующих тегов
 

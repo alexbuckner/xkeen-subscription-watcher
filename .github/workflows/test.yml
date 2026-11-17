@@ -26,6 +26,9 @@ jobs:
     - name: Vet
       run: go vet ./...
 
+    - name: Installer regression checks
+      run: sh tests/installer.sh
+
     - name: Download Xray
       run: |
         curl -sSfLo "$RUNNER_TEMP/xray.zip" https://github.com/XTLS/Xray-core/releases/download/v${{ matrix.xray-version }}/Xray-linux-64.zip

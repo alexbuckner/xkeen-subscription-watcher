@@ -2,7 +2,7 @@
 set -e
 
 REPO="alexbuckner/xkeen-subscription-watcher"
-INSTALL_PATH="/opt/sbin/xkeen-subscription-watcher"
+INSTALL_PATH="${XKEEN_WATCHER_INSTALL_DIR:-/opt/sbin}/xkeen-subscription-watcher"
 
 detect_arch() {
     arch=$(uname -m)
