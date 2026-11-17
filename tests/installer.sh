@@ -11,6 +11,16 @@ case "$SANDBOX" in
 esac
 trap 'rm -rf -- "$SANDBOX"' EXIT HUP INT TERM
 mkdir "$SANDBOX/bin" "$SANDBOX/dest"
+export REAL_MKTEMP=$(command -v mktemp)
+
+cat > "$SANDBOX/bin/mktemp" <<'MOCK'
+#!/bin/sh
+# BusyBox requires the six X characters at the end of the template.
+case "$1" in
+    *XXXXXX) exec "$REAL_MKTEMP" "$@" ;;
+    *) echo "mktemp: template must end in XXXXXX" >&2; exit 1 ;;
+esac
+MOCK
 
 cat > "$SANDBOX/bin/uname" <<'MOCK'
 #!/bin/sh
